@@ -192,9 +192,9 @@ def upload_to_youtube(data):
     print("Vídeo enviado como privado. ID:", result.get("id"))
 
 def main():
-    if not os.getenv("GEMINI_API_KEY"):
-        raise RuntimeError("Configure GEMINI_API_KEY nos Secrets do GitHub.")
-    data = gemini_script()
+    if not os.getenv("GROQ_API_KEY"):
+    raise RuntimeError("Configure GROQ_API_KEY nos Secrets do GitHub.")
+    data = groq_script()
     build_video(data)
     if os.getenv("YOUTUBE_AUTO_UPLOAD","false").lower() == "true":
         upload_to_youtube(data)
