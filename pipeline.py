@@ -12,44 +12,62 @@ W, H = 1080, 1920
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 VOICE = os.getenv("TTS_VOICE", "pt-BR-AntonioNeural")
 
-def gemini_script():
-    key = os.environ["GEMINI_API_KEY"]
+def groq_script():
+    key = os.environ["GROQ_API_KEY"]
+
     prompt = """
-Crie um roteiro ORIGINAL em português brasileiro para um YouTube Short de 40 a 55 segundos
-sobre um mistério ou curiosidade REAL, verificável e apropriado para público geral.
-Não invente fatos, datas, citações ou descobertas. Se houver incerteza, diga explicitamente.
-Escolha um tema que não seja sensacionalista. Estruture um gancho forte, explicação clara
-e conclusão memorável. Evite violência gráfica, teorias conspiratórias e afirmações sem evidência.
+Crie um roteiro ORIGINAL em português brasileiro para um YouTube Short
+de 40 a 55 segundos sobre um mistério ou curiosidade REAL e verificável.
+
+Não invente fatos, datas, citações ou descobertas.
+Use fontes institucionais, universidades, museus ou publicações científicas.
 Retorne SOMENTE JSON válido com:
 {
  "title":"título com até 70 caracteres",
- "narration":"narração completa, entre 90 e 125 palavras",
+ "narration":"narração entre 90 e 125 palavras",
  "description":"descrição curta com fontes e #Shorts",
  "scenes":[
-  {"headline":"frase curta", "subtext":"explicação visual curta"},
-  {"headline":"...", "subtext":"..."},
-  {"headline":"...", "subtext":"..."},
-  {"headline":"...", "subtext":"..."},
-  {"headline":"...", "subtext":"..."}
+  {"headline":"frase curta","subtext":"explicação visual curta"},
+  {"headline":"frase curta","subtext":"explicação visual curta"},
+  {"headline":"frase curta","subtext":"explicação visual curta"},
+  {"headline":"frase curta","subtext":"explicação visual curta"},
+  {"headline":"frase curta","subtext":"explicação visual curta"}
  ],
  "sources":["URL de fonte confiável 1","URL de fonte confiável 2"]
 }
-Use fontes institucionais, universidades, museus ou publicações científicas. Não invente URLs.
 """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
-    r = requests.post(url, params={"key": key}, json={
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.65}
-    }, timeout=90)
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    r = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.65,
+            "response_format": {"type": "json_object"}
+        },
+        timeout=90
+    )
+
     r.raise_for_status()
-    raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    raw = r.json()["choices"][0]["message"]["content"]
     data = json.loads(raw)
+
     required = ["title", "narration", "description", "scenes", "sources"]
+
     if any(k not in data for k in required) or len(data["scenes"]) != 5:
-        raise ValueError("Resposta do Gemini fora do formato esperado.")
+        raise ValueError("Resposta do Groq fora do formato esperado.")
+
     words = len(data["narration"].split())
+
     if not 75 <= words <= 145:
         raise ValueError(f"Roteiro fora do tamanho esperado: {words} palavras.")
+
     return data
 
 def get_font(size, bold=False):
