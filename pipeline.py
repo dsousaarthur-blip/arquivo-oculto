@@ -242,9 +242,6 @@ def save_metadata(data):
         json.dump(metadata, file, ensure_ascii=False, indent=4)
 
 def main():
-    if not os.getenv("GROQ_API_KEY"):
-        raise RuntimeError("Configure GROQ_API_KEY nos Secrets do GitHub.")
-
     print("Iniciando Arquivo Oculto...")
     data = groq_script()
     print("Roteiro criado:")
