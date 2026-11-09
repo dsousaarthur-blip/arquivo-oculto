@@ -243,7 +243,7 @@ def save_metadata(data):
 
 def main():
     if not os.getenv("GROQ_API_KEY"):
-        raise RuntimeError("ERRO DE INDENTAÇÃO CORRIGIDO - Configure GROQ_API_KEY nos Secrets do GitHub.")
+        raise RuntimeError("Configure GROQ_API_KEY nos Secrets do GitHub.")
 
     print("Iniciando Arquivo Oculto...")
     data = groq_script()
