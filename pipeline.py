@@ -1,4 +1,3 @@
-
 import os
 import json
 import asyncio
@@ -8,7 +7,6 @@ from pathlib import Path
 import requests
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
-
 
 # ==========================================
 # CONFIGURAÇÕES
@@ -29,13 +27,11 @@ METADATA_PATH = OUT / "metadata.json"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
-
 # ==========================================
 # GERAR ROTEIRO COM GROQ
 # ==========================================
 
 def groq_script():
-
     api_key = os.getenv("GROQ_API_KEY")
 
     if not api_key:
@@ -116,9 +112,7 @@ Se não souber uma fonte confiável, deixe a lista sources vazia.
         )
 
         response.raise_for_status()
-
         content = response.json()["choices"][0]["message"]["content"]
-
         data = json.loads(content)
 
     except requests.RequestException as error:
@@ -152,13 +146,11 @@ Se não souber uma fonte confiável, deixe a lista sources vazia.
 
     return data
 
-
 # ==========================================
 # FONTES E DESIGN
 # ==========================================
 
 def get_font(size, bold=False):
-
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         if bold else
@@ -171,15 +163,12 @@ def get_font(size, bold=False):
 
     return ImageFont.load_default()
 
-
 def create_background():
-
     image = Image.new("RGB", (W, H))
     pixels = image.load()
 
     for y in range(H):
         progress = y / H
-
         r = int(8 + progress * 8)
         g = int(10 + progress * 5)
         b = int(25 + progress * 18)
@@ -189,21 +178,14 @@ def create_background():
 
     return image
 
-
 def wrap_text(draw, text, font, max_width):
-
     words = text.split()
     lines = []
     current = ""
 
     for word in words:
         test = f"{current} {word}".strip()
-
-        width = draw.textbbox(
-            (0, 0),
-            test,
-            font=font
-        )[2]
+        width = draw.textbbox((0, 0), test, font=font)[2]
 
         if width <= max_width:
             current = test
@@ -217,55 +199,25 @@ def wrap_text(draw, text, font, max_width):
 
     return lines
 
-
-def draw_centered_text(
-    draw,
-    text,
-    y,
-    font,
-    fill,
-    max_width=850,
-    spacing=25
-):
-
-    lines = wrap_text(
-        draw,
-        text,
-        font,
-        max_width
-    )
+def draw_centered_text(draw, text, y, font, fill, max_width=850, spacing=25):
+    lines = wrap_text(draw, text, font, max_width)
 
     for line in lines:
-
-        bbox = draw.textbbox(
-            (0, 0),
-            line,
-            font=font
-        )
-
+        bbox = draw.textbbox((0, 0), line, font=font)
         width = bbox[2] - bbox[0]
         height = bbox[3] - bbox[1]
-
         x = (W - width) // 2
 
-        draw.text(
-            (x, y),
-            line,
-            font=font,
-            fill=fill
-        )
-
+        draw.text((x, y), line, font=font, fill=fill)
         y += height + spacing
 
     return y
-
 
 # ==========================================
 # CRIAR IMAGENS DAS CENAS
 # ==========================================
 
 def create_scene(scene, index):
-
     image = create_background()
     draw = ImageDraw.Draw(image)
 
@@ -296,12 +248,10 @@ def create_scene(scene, index):
     headline = str(scene["headline"])
     subtext = str(scene["subtext"])
 
-    headline_y = 650
-
     draw_centered_text(
         draw,
         headline,
-        headline_y,
+        650,
         headline_font,
         (245, 245, 255),
         max_width=880,
@@ -332,37 +282,25 @@ def create_scene(scene, index):
     )
 
     path = OUT / f"scene_{index + 1}.png"
-
     image.save(path)
-
     return path
-
 
 # ==========================================
 # GERAR NARRAÇÃO
 # ==========================================
 
 async def generate_audio(text):
-
-    communicate = edge_tts.Communicate(
-        text,
-        VOICE
-    )
-
+    communicate = edge_tts.Communicate(text, VOICE)
     await communicate.save(str(AUDIO_PATH))
 
-
 def create_audio(text):
-
     asyncio.run(generate_audio(text))
-
 
 # ==========================================
 # DESCOBRIR DURAÇÃO DO ÁUDIO
 # ==========================================
 
 def get_audio_duration():
-
     result = subprocess.run(
         [
             "ffprobe",
@@ -375,51 +313,33 @@ def get_audio_duration():
         text=True,
         check=True
     )
-
     return float(result.stdout.strip())
-
 
 # ==========================================
 # MONTAR VÍDEO
 # ==========================================
 
 def build_video(data):
-
     print("Criando narração...")
-
     create_audio(data["narration"])
 
     duration = get_audio_duration()
-
     scene_duration = duration / 5
 
     print("Criando cenas...")
-
     scene_paths = []
 
     for index, scene in enumerate(data["scenes"]):
-
         path = create_scene(scene, index)
-
         scene_paths.append(path)
 
     concat_file = OUT / "scenes.txt"
 
     with open(concat_file, "w", encoding="utf-8") as file:
-
         for path in scene_paths:
-
-            file.write(
-                f"file '{path.resolve()}'\n"
-            )
-
-            file.write(
-                f"duration {scene_duration:.3f}\n"
-            )
-
-        file.write(
-            f"file '{scene_paths[-1].resolve()}'\n"
-        )
+            file.write(f"file '{path.resolve()}'\n")
+            file.write(f"duration {scene_duration:.3f}\n")
+        file.write(f"file '{scene_paths[-1].resolve()}'\n")
 
     print("Montando vídeo...")
 
@@ -440,20 +360,14 @@ def build_video(data):
         str(VIDEO_PATH)
     ]
 
-    subprocess.run(
-        command,
-        check=True
-    )
-
+    subprocess.run(command, check=True)
     print("Vídeo criado com sucesso!")
-
 
 # ==========================================
 # SALVAR INFORMAÇÕES
 # ==========================================
 
 def save_metadata(data):
-
     metadata = {
         "title": data["title"],
         "description": data["description"],
@@ -461,30 +375,19 @@ def save_metadata(data):
         "video": str(VIDEO_PATH)
     }
 
-    with open(
-        METADATA_PATH,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        json.dump(
-            metadata,
-            file,
-            ensure_ascii=False,
-            indent=4
-        )
-
+    with open(METADATA_PATH, "w", encoding="utf-8") as file:
+        json.dump(metadata, file, ensure_ascii=False, indent=4)
 
 # ==========================================
 # EXECUÇÃO PRINCIPAL
 # ==========================================
 
 def main():
-
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError(
             "Configure GROQ_API_KEY nos Secrets do GitHub."
         )
+
     print("Iniciando Arquivo Oculto...")
 
     data = groq_script()
@@ -493,7 +396,6 @@ def main():
     print(data["title"])
 
     build_video(data)
-
     save_metadata(data)
 
     print("--------------------------------")
@@ -501,7 +403,6 @@ def main():
     print(f"Vídeo: {VIDEO_PATH}")
     print(f"Metadados: {METADATA_PATH}")
     print("--------------------------------")
-
 
 if __name__ == "__main__":
     main()
