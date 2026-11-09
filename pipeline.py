@@ -1,204 +1,508 @@
-import os, json, math, random, asyncio, subprocess, base64, tempfile
+
+import os
+import json
+import asyncio
+import subprocess
 from pathlib import Path
-from datetime import datetime, timezone
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
 import edge_tts
+from PIL import Image, ImageDraw, ImageFont
+
+
+# ==========================================
+# CONFIGURAÇÕES
+# ==========================================
 
 OUT = Path("output")
 OUT.mkdir(exist_ok=True)
-W, H = 1080, 1920
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+W = 1080
+H = 1920
+
 VOICE = os.getenv("TTS_VOICE", "pt-BR-AntonioNeural")
 
+VIDEO_PATH = OUT / "arquivo_oculto_short.mp4"
+AUDIO_PATH = OUT / "narracao.mp3"
+METADATA_PATH = OUT / "metadata.json"
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
+# ==========================================
+# GERAR ROTEIRO COM GROQ
+# ==========================================
+
 def groq_script():
-    key = os.environ["GROQ_API_KEY"]
+
+    api_key = os.getenv("GROQ_API_KEY")
+
+    if not api_key:
+        raise RuntimeError(
+            "GROQ_API_KEY não encontrada nos Secrets do GitHub."
+        )
 
     prompt = """
-Crie um roteiro ORIGINAL em português brasileiro para um YouTube Short
-de 40 a 55 segundos sobre um mistério ou curiosidade REAL e verificável.
+Crie um roteiro ORIGINAL em português brasileiro para um
+YouTube Short sobre um mistério ou curiosidade real e verificável.
 
-Não invente fatos, datas, citações ou descobertas.
-Use fontes institucionais, universidades, museus ou publicações científicas.
-Retorne SOMENTE JSON válido com:
+Regras:
+- Entre 90 e 125 palavras na narração.
+- Linguagem simples e envolvente.
+- Comece com uma frase que desperte curiosidade.
+- Explique o assunto sem enrolação.
+- Termine com uma conclusão interessante.
+- Não invente fatos, datas ou descobertas.
+- Não apresente teorias conspiratórias como fatos.
+- Não invente endereços de fontes.
+
+Retorne SOMENTE um JSON válido neste formato:
+
 {
- "title":"título com até 70 caracteres",
- "narration":"narração entre 90 e 125 palavras",
- "description":"descrição curta com fontes e #Shorts",
- "scenes":[
-  {"headline":"frase curta","subtext":"explicação visual curta"},
-  {"headline":"frase curta","subtext":"explicação visual curta"},
-  {"headline":"frase curta","subtext":"explicação visual curta"},
-  {"headline":"frase curta","subtext":"explicação visual curta"},
-  {"headline":"frase curta","subtext":"explicação visual curta"}
- ],
- "sources":["URL de fonte confiável 1","URL de fonte confiável 2"]
+  "title": "Título do vídeo",
+  "narration": "Texto completo da narração",
+  "description": "Descrição do vídeo",
+  "scenes": [
+    {
+      "headline": "Frase curta",
+      "subtext": "Explicação curta"
+    },
+    {
+      "headline": "Frase curta",
+      "subtext": "Explicação curta"
+    },
+    {
+      "headline": "Frase curta",
+      "subtext": "Explicação curta"
+    },
+    {
+      "headline": "Frase curta",
+      "subtext": "Explicação curta"
+    },
+    {
+      "headline": "Frase curta",
+      "subtext": "Explicação curta"
+    }
+  ],
+  "sources": []
 }
+
+Use exatamente cinco cenas.
+Se não souber uma fonte confiável, deixe a lista sources vazia.
 """
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
+    try:
+        response = requests.post(
+            GROQ_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": GROQ_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.65,
+                "response_format": {
+                    "type": "json_object"
+                }
+            },
+            timeout=90
+        )
 
-    r = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "llama-3.3-70b-versatile",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.65,
-            "response_format": {"type": "json_object"}
-        },
-        timeout=90
-    )
+        response.raise_for_status()
 
-    r.raise_for_status()
-    raw = r.json()["choices"][0]["message"]["content"]
-    data = json.loads(raw)
+        content = response.json()["choices"][0]["message"]["content"]
 
-    required = ["title", "narration", "description", "scenes", "sources"]
+        data = json.loads(content)
 
-    if any(k not in data for k in required) or len(data["scenes"]) != 5:
-        raise ValueError("Resposta do Groq fora do formato esperado.")
+    except requests.RequestException as error:
+        raise RuntimeError(
+            f"Erro ao conectar com o Groq: {error}"
+        ) from error
 
-    words = len(data["narration"].split())
+    except (KeyError, IndexError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            f"Não foi possível interpretar o roteiro: {error}"
+        ) from error
 
-    if not 75 <= words <= 145:
-        raise ValueError(f"Roteiro fora do tamanho esperado: {words} palavras.")
+    required = [
+        "title",
+        "narration",
+        "description",
+        "scenes",
+        "sources"
+    ]
+
+    for field in required:
+        if field not in data:
+            raise ValueError(
+                f"O roteiro não contém o campo: {field}"
+            )
+
+    if len(data["scenes"]) != 5:
+        raise ValueError(
+            "O roteiro precisa conter exatamente cinco cenas."
+        )
 
     return data
 
+
+# ==========================================
+# FONTES E DESIGN
+# ==========================================
+
 def get_font(size, bold=False):
+
     candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     ]
-    for p in candidates:
-        if Path(p).exists():
-            return ImageFont.truetype(p, size)
+
+    for path in candidates:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+
     return ImageFont.load_default()
 
+
+def create_background():
+
+    image = Image.new("RGB", (W, H))
+    pixels = image.load()
+
+    for y in range(H):
+        progress = y / H
+
+        r = int(8 + progress * 8)
+        g = int(10 + progress * 5)
+        b = int(25 + progress * 18)
+
+        for x in range(W):
+            pixels[x, y] = (r, g, b)
+
+    return image
+
+
 def wrap_text(draw, text, font, max_width):
-    words, lines, line = text.split(), [], ""
+
+    words = text.split()
+    lines = []
+    current = ""
+
     for word in words:
-        test = (line + " " + word).strip()
-        if draw.textbbox((0,0), test, font=font)[2] <= max_width:
-            line = test
+        test = f"{current} {word}".strip()
+
+        width = draw.textbbox(
+            (0, 0),
+            test,
+            font=font
+        )[2]
+
+        if width <= max_width:
+            current = test
         else:
-            if line: lines.append(line)
-            line = word
-    if line: lines.append(line)
+            if current:
+                lines.append(current)
+            current = word
+
+    if current:
+        lines.append(current)
+
     return lines
 
-def make_scene(scene, idx, title):
-    random.seed(idx + 77)
-    im = Image.new("RGB", (W, H), (7, 10, 22))
-    px = im.load()
-    # Gradiente escuro original, sem imagens de terceiros.
-    for y in range(H):
-        t = y / H
-        for x in range(W):
-            glow = max(0, 1 - math.sqrt(((x-W*0.55)/(W*0.9))**2 + ((y-H*0.34)/(H*0.7))**2))
-            px[x,y] = (int(7+12*glow), int(10+18*glow), int(22+34*glow))
-    d = ImageDraw.Draw(im, "RGBA")
-    # Anéis e pontos abstratos
-    for j in range(12):
-        x = random.randint(-100, W+100); y = random.randint(100, H-100)
-        rad = random.randint(80, 330)
-        d.ellipse((x-rad,y-rad,x+rad,y+rad), outline=(85,145,190,35), width=3)
-    for j in range(90):
-        x=random.randrange(W); y=random.randrange(H)
-        d.ellipse((x,y,x+3,y+3), fill=(190,210,230,random.randint(25,90)))
-    d.rounded_rectangle((68, 110, W-68, 180), radius=24, fill=(15,25,43,220), outline=(92,145,190,110), width=2)
-    d.text((100, 130), "ARQUIVO OCULTO  /  INVESTIGAÇÃO", font=get_font(26, True), fill=(150,195,225,255))
-    d.text((78, 440), f"ARQUIVO 0{idx+1}", font=get_font(30, True), fill=(100,190,220,255))
-    headline = scene.get("headline", "")
-    subtext = scene.get("subtext", "")
-    y = 560
-    for line in wrap_text(d, headline, get_font(72, True), W-160):
-        d.text((78,y), line, font=get_font(72, True), fill=(245,247,250,255), stroke_width=1, stroke_fill=(10,15,25,255))
-        y += 94
-    y += 45
-    for line in wrap_text(d, subtext, get_font(39), W-170):
-        d.text((82,y), line, font=get_font(39), fill=(180,198,216,255))
-        y += 58
-    d.rounded_rectangle((78,H-260,W-78,H-180), radius=18, fill=(17,31,50,220))
-    d.text((105,H-240), "MISTÉRIOS • CIÊNCIA • HISTÓRIA", font=get_font(25, True), fill=(145,185,215,255))
-    path = OUT / f"scene_{idx+1}.png"
-    im.save(path, optimize=True)
+
+def draw_centered_text(
+    draw,
+    text,
+    y,
+    font,
+    fill,
+    max_width=850,
+    spacing=25
+):
+
+    lines = wrap_text(
+        draw,
+        text,
+        font,
+        max_width
+    )
+
+    for line in lines:
+
+        bbox = draw.textbbox(
+            (0, 0),
+            line,
+            font=font
+        )
+
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+
+        x = (W - width) // 2
+
+        draw.text(
+            (x, y),
+            line,
+            font=font,
+            fill=fill
+        )
+
+        y += height + spacing
+
+    return y
+
+
+# ==========================================
+# CRIAR IMAGENS DAS CENAS
+# ==========================================
+
+def create_scene(scene, index):
+
+    image = create_background()
+    draw = ImageDraw.Draw(image)
+
+    title_font = get_font(38, True)
+    headline_font = get_font(72, True)
+    subtext_font = get_font(42)
+
+    draw.text(
+        (75, 90),
+        "ARQUIVO OCULTO",
+        font=title_font,
+        fill=(160, 165, 190)
+    )
+
+    draw.line(
+        (75, 155, 1005, 155),
+        fill=(75, 85, 120),
+        width=3
+    )
+
+    draw.text(
+        (75, 210),
+        f"ARQUIVO Nº 00{index + 1}",
+        font=get_font(30),
+        fill=(115, 145, 220)
+    )
+
+    headline = str(scene["headline"])
+    subtext = str(scene["subtext"])
+
+    headline_y = 650
+
+    draw_centered_text(
+        draw,
+        headline,
+        headline_y,
+        headline_font,
+        (245, 245, 255),
+        max_width=880,
+        spacing=30
+    )
+
+    draw_centered_text(
+        draw,
+        subtext,
+        1050,
+        subtext_font,
+        (180, 190, 215),
+        max_width=850,
+        spacing=25
+    )
+
+    draw.line(
+        (75, 1740, 1005, 1740),
+        fill=(75, 85, 120),
+        width=3
+    )
+
+    draw.text(
+        (75, 1780),
+        "NEM TUDO É O QUE PARECE.",
+        font=get_font(27, True),
+        fill=(130, 145, 180)
+    )
+
+    path = OUT / f"scene_{index + 1}.png"
+
+    image.save(path)
+
     return path
 
-async def make_voice(text, path):
-    communicate = edge_tts.Communicate(text, VOICE, rate="+2%")
-    await communicate.save(str(path))
+
+# ==========================================
+# GERAR NARRAÇÃO
+# ==========================================
+
+async def generate_audio(text):
+
+    communicate = edge_tts.Communicate(
+        text,
+        VOICE
+    )
+
+    await communicate.save(str(AUDIO_PATH))
+
+
+def create_audio(text):
+
+    asyncio.run(generate_audio(text))
+
+
+# ==========================================
+# DESCOBRIR DURAÇÃO DO ÁUDIO
+# ==========================================
+
+def get_audio_duration():
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(AUDIO_PATH)
+        ],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    return float(result.stdout.strip())
+
+
+# ==========================================
+# MONTAR VÍDEO
+# ==========================================
 
 def build_video(data):
-    audio = OUT / "narration.mp3"
-    asyncio.run(make_voice(data["narration"], audio))
-    probe = subprocess.check_output([
-        "ffprobe","-v","error","-show_entries","format=duration",
-        "-of","default=noprint_wrappers=1:nokey=1",str(audio)
-    ], text=True).strip()
-    duration = max(30.0, min(60.0, float(probe)))
-    scene_duration = duration / 5
-    scenes = [make_scene(s, i, data["title"]) for i,s in enumerate(data["scenes"])]
-    cmd = ["ffmpeg","-y"]
-    for p in scenes:
-        cmd += ["-loop","1","-t",f"{scene_duration:.3f}","-i",str(p)]
-    cmd += ["-i",str(audio)]
-    filters=[]
-    for i in range(5):
-        filters.append(
-            f"[{i}:v]scale=1200:2134,zoompan=z='min(zoom+0.00035,1.08)':"
-            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:"
-            f"s=1080x1920:fps=30,trim=duration={scene_duration:.3f},setpts=PTS-STARTPTS[v{i}]"
-        )
-    concat = "".join(f"[v{i}]" for i in range(5))
-    filters.append(f"{concat}concat=n=5:v=1:a=0,format=yuv420p[vout]")
-    cmd += ["-filter_complex",";".join(filters),"-map","[vout]","-map","5:a",
-            "-t",f"{duration:.3f}","-r","30","-c:v","libx264","-preset","veryfast",
-            "-crf","23","-c:a","aac","-b:a","128k","-movflags","+faststart",
-            str(OUT/"arquivo_oculto_short.mp4")]
-    subprocess.run(cmd, check=True)
-    (OUT/"metadata.json").write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
 
-def upload_to_youtube(data):
-    encoded = os.environ.get("YT_TOKEN_JSON_B64")
-    if not encoded:
-        print("YT_TOKEN_JSON_B64 ausente: vídeo gerado, upload ignorado.")
-        return
-    from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
-    info = json.loads(base64.b64decode(encoded).decode("utf-8"))
-    creds = Credentials.from_authorized_user_info(info, scopes=["https://www.googleapis.com/auth/youtube.upload"])
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    youtube = build("youtube","v3",credentials=creds)
-    body = {
-        "snippet": {
-            "title": data["title"][:100],
-            "description": data["description"][:5000],
-            "tags": ["mistérios","curiosidades","história","ciência","Arquivo Oculto"],
-            "categoryId": "27"
-        },
-        "status": {"privacyStatus":"private", "selfDeclaredMadeForKids":False}
+    print("Criando narração...")
+
+    create_audio(data["narration"])
+
+    duration = get_audio_duration()
+
+    scene_duration = duration / 5
+
+    print("Criando cenas...")
+
+    scene_paths = []
+
+    for index, scene in enumerate(data["scenes"]):
+
+        path = create_scene(scene, index)
+
+        scene_paths.append(path)
+
+    concat_file = OUT / "scenes.txt"
+
+    with open(concat_file, "w", encoding="utf-8") as file:
+
+        for path in scene_paths:
+
+            file.write(
+                f"file '{path.resolve()}'\n"
+            )
+
+            file.write(
+                f"duration {scene_duration:.3f}\n"
+            )
+
+        file.write(
+            f"file '{scene_paths[-1].resolve()}'\n"
+        )
+
+    print("Montando vídeo...")
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_file),
+        "-i", str(AUDIO_PATH),
+        "-vf", "scale=1080:1920,fps=30,format=yuv420p",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(VIDEO_PATH)
+    ]
+
+    subprocess.run(
+        command,
+        check=True
+    )
+
+    print("Vídeo criado com sucesso!")
+
+
+# ==========================================
+# SALVAR INFORMAÇÕES
+# ==========================================
+
+def save_metadata(data):
+
+    metadata = {
+        "title": data["title"],
+        "description": data["description"],
+        "sources": data["sources"],
+        "video": str(VIDEO_PATH)
     }
-    media = MediaFileUpload(str(OUT/"arquivo_oculto_short.mp4"), mimetype="video/mp4", resumable=True)
-    result = youtube.videos().insert(part="snippet,status", body=body, media_body=media).execute()
-    print("Vídeo enviado como privado. ID:", result.get("id"))
+
+    with open(
+        METADATA_PATH,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(
+            metadata,
+            file,
+            ensure_ascii=False,
+            indent=4
+        )
+
+
+# ==========================================
+# EXECUÇÃO PRINCIPAL
+# ==========================================
 
 def main():
+
     if not os.getenv("GROQ_API_KEY"):
-    raise RuntimeError("Configure GROQ_API_KEY nos Secrets do GitHub.")
+        raise RuntimeError(
+            "Configure GROQ_API_KEY nos Secrets do GitHub."
+        )
+
+    print("Iniciando Arquivo Oculto...")
+
     data = groq_script()
+
+    print("Roteiro criado:")
+    print(data["title"])
+
     build_video(data)
-    if os.getenv("YOUTUBE_AUTO_UPLOAD","false").lower() == "true":
-        upload_to_youtube(data)
-    print("SHORT_PRONTO:", OUT/"arquivo_oculto_short.mp4")
+
+    save_metadata(data)
+
+    print("--------------------------------")
+    print("SHORT PRONTO!")
+    print(f"Vídeo: {VIDEO_PATH}")
+    print(f"Metadados: {METADATA_PATH}")
+    print("--------------------------------")
+
 
 if __name__ == "__main__":
     main()
